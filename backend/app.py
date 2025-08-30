@@ -10,6 +10,7 @@ import json
 import uuid
 import tempfile
 import shutil
+import zipfile
 from pathlib import Path
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -32,7 +33,7 @@ CORS(app)
 # Configuration
 UPLOAD_FOLDER = 'uploads'
 RESULTS_FOLDER = 'results'
-ALLOWED_EXTENSIONS = {'dcm', 'dicom'}
+ALLOWED_EXTENSIONS = {'dcm', 'dicom', 'zip'}
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB max file size
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -50,6 +51,58 @@ def allowed_file(filename):
     """Check if file extension is allowed"""
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def extract_dicom_from_zip(zip_path, extract_dir):
+    """Extract DICOM files from ZIP archive"""
+    extracted_files = []
+    
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            # List all files in the ZIP
+            file_list = zip_ref.namelist()
+            
+            # Filter for DICOM files
+            dicom_files = [f for f in file_list if f.lower().endswith(('.dcm', '.dicom'))]
+            
+            if not dicom_files:
+                raise ValueError("No DICOM files found in ZIP archive")
+            
+            # Extract DICOM files
+            for dicom_file in dicom_files:
+                # Extract to the specified directory
+                zip_ref.extract(dicom_file, extract_dir)
+                extracted_path = os.path.join(extract_dir, dicom_file)
+                
+                # Validate that the extracted file is actually a DICOM file
+                if is_dicom_file(extracted_path):
+                    extracted_files.append(extracted_path)
+                    print(f"Extracted valid DICOM file: {dicom_file}")
+                else:
+                    print(f"Warning: {dicom_file} does not appear to be a valid DICOM file")
+                    # Remove the invalid file
+                    os.remove(extracted_path)
+            
+            if not extracted_files:
+                raise ValueError("No valid DICOM files found in ZIP archive after validation")
+            
+            return extracted_files
+            
+    except zipfile.BadZipFile:
+        raise ValueError("Invalid ZIP file format")
+    except Exception as e:
+        raise ValueError(f"Error extracting ZIP file: {str(e)}")
+
+def is_dicom_file(file_path):
+    """Check if a file is a valid DICOM file"""
+    try:
+        # Try to read the first 4 bytes to check DICOM signature
+        with open(file_path, 'rb') as f:
+            # Skip to position 128 where DICOM signature should be
+            f.seek(128)
+            signature = f.read(4)
+            return signature == b'DICM'
+    except:
+        return False
 
 def process_dicom_files(job_id, file_paths):
     """Process DICOM files in background thread"""
@@ -128,6 +181,24 @@ def process_dicom_files(job_id, file_paths):
         print(f"Error processing job {job_id}: {e}")
         print(traceback.format_exc())
 
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint with API information"""
+    return jsonify({
+        'message': '3D Bone Reconstruction AI Backend',
+        'version': '1.0.0',
+        'status': 'running',
+        'endpoints': {
+            'health': '/api/health',
+            'upload': '/api/upload',
+            'jobs': '/api/jobs',
+            'job_status': '/api/jobs/<job_id>',
+            'job_results': '/api/jobs/<job_id>/results',
+            'download': '/api/jobs/<job_id>/download/<file_type>'
+        },
+        'timestamp': datetime.now().isoformat()
+    })
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -168,14 +239,38 @@ def upload_files():
                 filename = secure_filename(file.filename)
                 file_path = os.path.join(job_dir, filename)
                 file.save(file_path)
-                file_paths.append(file_path)
-                uploaded_files.append({
-                    'filename': filename,
-                    'size': os.path.getsize(file_path)
-                })
+                
+                # Check if it's a ZIP file
+                if filename.lower().endswith('.zip'):
+                    try:
+                        # Extract DICOM files from ZIP
+                        extracted_files = extract_dicom_from_zip(file_path, job_dir)
+                        file_paths.extend(extracted_files)
+                        
+                        # Add extracted files to uploaded_files list
+                        for extracted_file in extracted_files:
+                            extracted_filename = os.path.basename(extracted_file)
+                            uploaded_files.append({
+                                'filename': f"{filename}/{extracted_filename}",
+                                'size': os.path.getsize(extracted_file),
+                                'source': 'zip'
+                            })
+                        
+                        print(f"Extracted {len(extracted_files)} DICOM files from {filename}")
+                        
+                    except Exception as e:
+                        return jsonify({'error': f'Error processing ZIP file {filename}: {str(e)}'}), 400
+                else:
+                    # Regular DICOM file
+                    file_paths.append(file_path)
+                    uploaded_files.append({
+                        'filename': filename,
+                        'size': os.path.getsize(file_path),
+                        'source': 'direct'
+                    })
         
         if not file_paths:
-            return jsonify({'error': 'No valid DICOM files uploaded'}), 400
+            return jsonify({'error': 'No valid DICOM files found in uploaded files'}), 400
         
         # Initialize job status
         processing_jobs[job_id] = {
@@ -193,11 +288,27 @@ def upload_files():
         thread.daemon = True
         thread.start()
         
+        # Count files by source
+        direct_files = [f for f in uploaded_files if f.get('source') == 'direct']
+        zip_files = [f for f in uploaded_files if f.get('source') == 'zip']
+        
+        message = f"Files uploaded successfully, processing started. "
+        if direct_files and zip_files:
+            message += f"Uploaded {len(direct_files)} direct DICOM files and extracted {len(zip_files)} DICOM files from ZIP archives."
+        elif zip_files:
+            message += f"Extracted {len(zip_files)} DICOM files from ZIP archives."
+        else:
+            message += f"Uploaded {len(direct_files)} DICOM files."
+        
         return jsonify({
             'job_id': job_id,
             'status': 'queued',
             'files_uploaded': len(file_paths),
-            'message': 'Files uploaded successfully, processing started'
+            'files_by_source': {
+                'direct': len(direct_files),
+                'from_zip': len(zip_files)
+            },
+            'message': message
         })
         
     except Exception as e:

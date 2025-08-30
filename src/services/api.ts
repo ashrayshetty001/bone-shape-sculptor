@@ -12,6 +12,7 @@ export interface JobStatus {
   files?: Array<{
     filename: string;
     size: number;
+    source?: 'direct' | 'zip';
   }>;
   created_at?: string;
   error?: string;

@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import { Upload as UploadIcon, FileImage, X, CheckCircle } from 'lucide-react';
+import { Upload as UploadIcon, FileImage, X, CheckCircle, Archive } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface UploadedFile {
@@ -12,6 +12,7 @@ interface UploadedFile {
   id: string;
   status: 'pending' | 'uploading' | 'completed' | 'error';
   progress: number;
+  isZip?: boolean;
 }
 
 const Upload = () => {
@@ -24,10 +25,25 @@ const Upload = () => {
       id: Math.random().toString(36).substr(2, 9),
       status: 'pending' as const,
       progress: 0,
+      isZip: file.name.toLowerCase().endsWith('.zip'),
     }));
     
     setFiles(prev => [...prev, ...newFiles]);
-    toast.success(`${acceptedFiles.length} DICOM file(s) added`);
+    
+    // Count ZIP files and DICOM files separately
+    const zipFiles = acceptedFiles.filter(f => f.name.toLowerCase().endsWith('.zip'));
+    const dicomFiles = acceptedFiles.filter(f => f.name.toLowerCase().endsWith('.dcm') || f.name.toLowerCase().endsWith('.dicom'));
+    
+    let message = '';
+    if (zipFiles.length > 0 && dicomFiles.length > 0) {
+      message = `${zipFiles.length} ZIP file(s) and ${dicomFiles.length} DICOM file(s) added`;
+    } else if (zipFiles.length > 0) {
+      message = `${zipFiles.length} ZIP file(s) added`;
+    } else {
+      message = `${dicomFiles.length} DICOM file(s) added`;
+    }
+    
+    toast.success(message);
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -35,6 +51,8 @@ const Upload = () => {
     accept: {
       'application/dicom': ['.dcm', '.dicom'],
       'application/octet-stream': ['.dcm', '.dicom'],
+      'application/zip': ['.zip'],
+      'application/x-zip-compressed': ['.zip'],
     },
     multiple: true,
   });
@@ -119,7 +137,7 @@ const Upload = () => {
               Upload DICOM Files
             </CardTitle>
             <CardDescription>
-              Drag and drop your DICOM (.dcm) files here, or click to browse
+              Drag and drop your DICOM (.dcm) files or ZIP archives containing DICOM files here, or click to browse
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -146,7 +164,7 @@ const Upload = () => {
                       Click to upload or drag and drop
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      DICOM files (.dcm, .dicom) only
+                      DICOM files (.dcm, .dicom) or ZIP archives (.zip) containing DICOM files
                     </p>
                   </div>
                 )}
@@ -171,8 +189,17 @@ const Upload = () => {
                     className="flex items-center justify-between p-3 border rounded-lg"
                   >
                     <div className="flex items-center gap-3 flex-1">
-                      <FileImage className="h-4 w-4 text-muted-foreground" />
+                      {file.isZip ? (
+                        <Archive className="h-4 w-4 text-blue-500" />
+                      ) : (
+                        <FileImage className="h-4 w-4 text-muted-foreground" />
+                      )}
                       <span className="font-medium truncate">{file.file.name}</span>
+                      {file.isZip && (
+                        <Badge variant="outline" className="text-xs">
+                          ZIP Archive
+                        </Badge>
+                      )}
                       <Badge 
                         variant="secondary" 
                         className={getStatusColor(file.status)}
