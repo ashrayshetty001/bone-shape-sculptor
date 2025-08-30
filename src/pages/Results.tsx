@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -14,30 +15,133 @@ import {
   Play,
   Pause,
   SkipBack,
-  SkipForward
+  SkipForward,
+  Loader2
 } from 'lucide-react';
+import { toast } from 'sonner';
+import { apiService, type AnalysisResults, type JobStatus } from '@/services/api';
 
 const Results = () => {
+  const [searchParams] = useSearchParams();
+  const jobId = searchParams.get('jobId');
+  
   const [currentSlice, setCurrentSlice] = useState([50]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [zoomLevel, setZoomLevel] = useState([100]);
   const [rotationX, setRotationX] = useState([0]);
   const [rotationY, setRotationY] = useState([0]);
   const [rotationZ, setRotationZ] = useState([0]);
+  
+  // Real data states
+  const [results, setResults] = useState<AnalysisResults | null>(null);
+  const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Mock data for demonstration
-  const processingInfo = {
+  // Load results when component mounts
+  useEffect(() => {
+    if (!jobId) {
+      setError('No job ID provided');
+      setLoading(false);
+      return;
+    }
+
+    const loadResults = async () => {
+      try {
+        console.log('Loading results for job:', jobId);
+        
+        // Get job status first
+        const status = await apiService.getJobStatus(jobId);
+        setJobStatus(status);
+        
+        if (status.status === 'completed') {
+          // Get detailed results
+          const jobResults = await apiService.getJobResults(jobId);
+          setResults(jobResults);
+          console.log('Results loaded:', jobResults);
+        } else if (status.status === 'error') {
+          setError(`Processing failed: ${status.error || 'Unknown error'}`);
+        } else {
+          setError('Processing not yet completed');
+        }
+      } catch (error: any) {
+        console.error('Failed to load results:', error);
+        setError(`Failed to load results: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadResults();
+  }, [jobId]);
+
+  // Use real data or fallback to mock data
+  const processingInfo = results ? {
+    totalSlices: results.total_slices,
+    processingTime: results.processing_time,
+    boneVolume: results.bone_volume,
+    surfaceArea: results.surface_area,
+    resolution: results.resolution,
+    boneLength: results.bone_length,
+    boneDensity: results.bone_density
+  } : {
     totalSlices: 100,
-    processingTime: '2m 34s',
-    boneVolume: '156.7 cm³',
-    surfaceArea: '234.5 cm²',
-    resolution: '0.5mm × 0.5mm × 1.0mm'
+    processingTime: 'Loading...',
+    boneVolume: 'Loading...',
+    surfaceArea: 'Loading...',
+    resolution: 'Loading...',
+    boneLength: 'Loading...',
+    boneDensity: 'Loading...'
   };
 
-  const downloadModel = (format: string) => {
-    // Mock download functionality
-    console.log(`Downloading model in ${format} format`);
+  const downloadModel = async (format: 'stl' | 'obj' | 'ply' | 'report') => {
+    if (!jobId) {
+      toast.error('No job ID available for download');
+      return;
+    }
+
+    try {
+      await apiService.downloadAndSaveFile(jobId, format);
+      toast.success(`${format.toUpperCase()} file downloaded successfully`);
+    } catch (error: any) {
+      console.error('Download failed:', error);
+      toast.error(`Download failed: ${error.message}`);
+    }
   };
+
+  // Loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-background to-muted/20 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <Loader2 className="h-8 w-8 animate-spin mx-auto" />
+          <p className="text-lg">Loading results...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-background to-muted/20 flex items-center justify-center">
+        <Card className="max-w-md">
+          <CardHeader>
+            <CardTitle className="text-destructive">Error</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground">{error}</p>
+            <Button 
+              className="mt-4" 
+              onClick={() => window.history.back()}
+            >
+              Go Back
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background to-muted/20 p-6">
@@ -50,11 +154,11 @@ const Results = () => {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => downloadModel('STL')}>
+            <Button variant="outline" onClick={() => downloadModel('stl')}>
               <Download className="h-4 w-4 mr-2" />
               Download STL
             </Button>
-            <Button variant="outline" onClick={() => downloadModel('OBJ')}>
+            <Button variant="outline" onClick={() => downloadModel('obj')}>
               <Download className="h-4 w-4 mr-2" />
               Download OBJ
             </Button>
@@ -289,19 +393,19 @@ const Results = () => {
                 <CardTitle className="text-lg">Export Options</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <Button variant="outline" className="w-full justify-start">
+                <Button variant="outline" className="w-full justify-start" onClick={() => downloadModel('stl')}>
                   <Download className="h-4 w-4 mr-2" />
                   STL Format
                 </Button>
-                <Button variant="outline" className="w-full justify-start">
+                <Button variant="outline" className="w-full justify-start" onClick={() => downloadModel('obj')}>
                   <Download className="h-4 w-4 mr-2" />
                   OBJ Format
                 </Button>
-                <Button variant="outline" className="w-full justify-start">
+                <Button variant="outline" className="w-full justify-start" onClick={() => downloadModel('ply')}>
                   <Download className="h-4 w-4 mr-2" />
                   PLY Format
                 </Button>
-                <Button variant="outline" className="w-full justify-start">
+                <Button variant="outline" className="w-full justify-start" onClick={() => downloadModel('report')}>
                   <Download className="h-4 w-4 mr-2" />
                   Analysis Report
                 </Button>
