@@ -35,6 +35,8 @@ const Upload = () => {
     accept: {
       'application/dicom': ['.dcm', '.dicom'],
       'application/octet-stream': ['.dcm', '.dicom'],
+      'application/zip': ['.zip'],
+      'application/x-zip-compressed': ['.zip'],
     },
     multiple: true,
   });
@@ -119,7 +121,7 @@ const Upload = () => {
               Upload DICOM Files
             </CardTitle>
             <CardDescription>
-              Drag and drop your DICOM (.dcm) files here, or click to browse
+              Drag and drop your DICOM (.dcm) files or ZIP archives here, or click to browse
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -146,7 +148,7 @@ const Upload = () => {
                       Click to upload or drag and drop
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      DICOM files (.dcm, .dicom) only
+                      DICOM files (.dcm, .dicom) or ZIP archives
                     </p>
                   </div>
                 )}

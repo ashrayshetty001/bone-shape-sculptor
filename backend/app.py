@@ -10,6 +10,7 @@ import json
 import uuid
 import tempfile
 import shutil
+import zipfile
 from pathlib import Path
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -32,7 +33,7 @@ CORS(app)
 # Configuration
 UPLOAD_FOLDER = 'uploads'
 RESULTS_FOLDER = 'results'
-ALLOWED_EXTENSIONS = {'dcm', 'dicom'}
+ALLOWED_EXTENSIONS = {'dcm', 'dicom', 'zip'}
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB max file size
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -168,11 +169,33 @@ def upload_files():
                 filename = secure_filename(file.filename)
                 file_path = os.path.join(job_dir, filename)
                 file.save(file_path)
-                file_paths.append(file_path)
-                uploaded_files.append({
-                    'filename': filename,
-                    'size': os.path.getsize(file_path)
-                })
+                
+                # Handle ZIP files
+                if filename.lower().endswith('.zip'):
+                    try:
+                        with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                            for zip_info in zip_ref.infolist():
+                                if not zip_info.is_dir() and (zip_info.filename.lower().endswith('.dcm') or zip_info.filename.lower().endswith('.dicom')):
+                                    # Extract DICOM file
+                                    extracted_path = os.path.join(job_dir, os.path.basename(zip_info.filename))
+                                    with zip_ref.open(zip_info) as source, open(extracted_path, 'wb') as target:
+                                        target.write(source.read())
+                                    file_paths.append(extracted_path)
+                                    uploaded_files.append({
+                                        'filename': f"{filename}:{os.path.basename(zip_info.filename)}",
+                                        'size': zip_info.file_size
+                                    })
+                        # Remove the ZIP file after extraction
+                        os.remove(file_path)
+                    except zipfile.BadZipFile:
+                        print(f"Invalid ZIP file: {filename}")
+                else:
+                    # Regular DICOM file
+                    file_paths.append(file_path)
+                    uploaded_files.append({
+                        'filename': filename,
+                        'size': os.path.getsize(file_path)
+                    })
         
         if not file_paths:
             return jsonify({'error': 'No valid DICOM files uploaded'}), 400
