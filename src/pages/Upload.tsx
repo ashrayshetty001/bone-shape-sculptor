@@ -1,11 +1,13 @@
 import React, { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Upload as UploadIcon, FileImage, X, CheckCircle, Archive } from 'lucide-react';
 import { toast } from 'sonner';
+import { apiService, type JobStatus } from '@/services/api';
 
 interface UploadedFile {
   file: File;
@@ -16,8 +18,10 @@ interface UploadedFile {
 }
 
 const Upload = () => {
+  const navigate = useNavigate();
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const newFiles = acceptedFiles.map(file => ({
@@ -69,33 +73,43 @@ const Upload = () => {
 
     setIsProcessing(true);
     
-    // Simulate file processing
-    for (let i = 0; i < files.length; i++) {
-      setFiles(prev => prev.map(f => 
-        f.id === files[i].id 
-          ? { ...f, status: 'uploading' }
-          : f
-      ));
+    try {
+      // Get actual File objects from the uploaded files
+      const filesToUpload = files.map(f => f.file);
+      
+      // Call the real API to process files
+      const result = await apiService.processFiles(
+        filesToUpload,
+        (status: JobStatus) => {
+          // Update progress based on backend status
+          console.log('Processing status:', status);
+          setCurrentJobId(status.job_id);
+          
+          // Update file statuses based on backend progress
+          setFiles(prev => prev.map(f => ({
+            ...f,
+            status: status.status === 'completed' ? 'completed' : 'uploading',
+            progress: status.progress
+          })));
+        }
+      );
 
-      // Simulate progress
-      for (let progress = 0; progress <= 100; progress += 10) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        setFiles(prev => prev.map(f => 
-          f.id === files[i].id 
-            ? { ...f, progress }
-            : f
-        ));
-      }
-
-      setFiles(prev => prev.map(f => 
-        f.id === files[i].id 
-          ? { ...f, status: 'completed' }
-          : f
-      ));
+      // Navigate to results page with job ID
+      toast.success('Processing completed successfully!');
+      navigate(`/results?jobId=${result.jobId}`);
+      
+    } catch (error: any) {
+      console.error('Processing failed:', error);
+      toast.error(`Processing failed: ${error.message}`);
+      
+      // Mark all files as error
+      setFiles(prev => prev.map(f => ({
+        ...f,
+        status: 'error'
+      })));
+    } finally {
+      setIsProcessing(false);
     }
-
-    setIsProcessing(false);
-    toast.success('All files processed successfully!');
   };
 
   const getStatusColor = (status: UploadedFile['status']) => {
@@ -137,7 +151,11 @@ const Upload = () => {
               Upload DICOM Files
             </CardTitle>
             <CardDescription>
+<<<<<<< HEAD
               Drag and drop your DICOM (.dcm) files or ZIP archives containing DICOM files here, or click to browse
+=======
+              Drag and drop your DICOM (.dcm) files or ZIP archives here, or click to browse
+>>>>>>> 7b675b3b930315b3e12c8f0c9a276d80f9f3b831
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -164,7 +182,11 @@ const Upload = () => {
                       Click to upload or drag and drop
                     </p>
                     <p className="text-sm text-muted-foreground">
+<<<<<<< HEAD
                       DICOM files (.dcm, .dicom) or ZIP archives (.zip) containing DICOM files
+=======
+                      DICOM files (.dcm, .dicom) or ZIP archives
+>>>>>>> 7b675b3b930315b3e12c8f0c9a276d80f9f3b831
                     </p>
                   </div>
                 )}
