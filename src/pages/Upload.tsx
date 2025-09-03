@@ -151,11 +151,7 @@ const Upload = () => {
               Upload DICOM Files
             </CardTitle>
             <CardDescription>
-<<<<<<< HEAD
               Drag and drop your DICOM (.dcm) files or ZIP archives containing DICOM files here, or click to browse
-=======
-              Drag and drop your DICOM (.dcm) files or ZIP archives here, or click to browse
->>>>>>> 7b675b3b930315b3e12c8f0c9a276d80f9f3b831
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -182,11 +178,7 @@ const Upload = () => {
                       Click to upload or drag and drop
                     </p>
                     <p className="text-sm text-muted-foreground">
-<<<<<<< HEAD
                       DICOM files (.dcm, .dicom) or ZIP archives (.zip) containing DICOM files
-=======
-                      DICOM files (.dcm, .dicom) or ZIP archives
->>>>>>> 7b675b3b930315b3e12c8f0c9a276d80f9f3b831
                     </p>
                   </div>
                 )}

@@ -77,13 +77,13 @@ const Results = () => {
 
   // Use real data or fallback to mock data
   const processingInfo = results ? {
-    totalSlices: results.total_slices,
-    processingTime: results.processing_time,
-    boneVolume: results.bone_volume,
-    surfaceArea: results.surface_area,
-    resolution: results.resolution,
-    boneLength: results.bone_length,
-    boneDensity: results.bone_density
+    totalSlices: results.total_slices || 0,
+    processingTime: results.processing_time || 'N/A',
+    boneVolume: results.bone_volume || 'N/A',
+    surfaceArea: results.surface_area_cm2 || results.surface_area || 'N/A',
+    resolution: results.resolution || 'N/A',
+    boneLength: results.bone_length || 'N/A',
+    boneDensity: results.bone_density_percent || results.bone_density || 'N/A'
   } : {
     totalSlices: 100,
     processingTime: 'Loading...',
@@ -127,16 +127,36 @@ const Results = () => {
       <div className="min-h-screen bg-gradient-to-br from-background to-muted/20 flex items-center justify-center">
         <Card className="max-w-md">
           <CardHeader>
-            <CardTitle className="text-destructive">Error</CardTitle>
+            <CardTitle className="text-destructive">Results Not Available</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
             <p className="text-muted-foreground">{error}</p>
-            <Button 
-              className="mt-4" 
-              onClick={() => window.history.back()}
-            >
-              Go Back
-            </Button>
+            {error.includes('No job ID provided') && (
+              <div className="p-4 bg-muted/30 rounded-lg">
+                <p className="text-sm text-muted-foreground">
+                  To view results, you need to:
+                </p>
+                <ol className="text-sm text-muted-foreground mt-2 space-y-1 list-decimal list-inside">
+                  <li>Upload DICOM files on the Upload page</li>
+                  <li>Wait for processing to complete</li>
+                  <li>You'll be automatically redirected here</li>
+                </ol>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Button 
+                onClick={() => window.location.href = '/upload'}
+                className="flex-1"
+              >
+                Upload DICOM Files
+              </Button>
+              <Button 
+                variant="outline"
+                onClick={() => window.history.back()}
+              >
+                Go Back
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>

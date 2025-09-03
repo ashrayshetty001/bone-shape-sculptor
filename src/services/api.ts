@@ -27,11 +27,21 @@ export interface AnalysisResults {
   processing_time: string;
   bone_volume: string;
   surface_area: string;
+  surface_area_cm2?: string;
   resolution: string;
   total_slices: number;
   bone_density: string;
+  bone_density_percent?: string;
   bone_length: string;
   timestamp: string;
+  bone_volume_cm3?: string;
+  mesh_vertices?: number;
+  mesh_faces?: number;
+  files_info?: Array<{
+    filename: string;
+    patient_info: any;
+    analysis: any;
+  }>;
 }
 
 export interface UploadResponse {
@@ -52,24 +62,46 @@ export interface JobSummary {
 class ApiService {
   private async request<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    retries: number = 3
   ): Promise<T> {
     const url = `${API_BASE_URL}${endpoint}`;
     
-    const response = await fetch(url, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-      ...options,
-    });
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const response = await fetch(url, {
+          headers: {
+            'Content-Type': 'application/json',
+            ...options.headers,
+          },
+          ...options,
+        });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        return response.json();
+      } catch (error) {
+        const isNetworkError = error instanceof TypeError && 
+          (error.message.includes('Failed to fetch') || 
+           error.message.includes('NetworkError') ||
+           error.message.includes('ERR_NETWORK_CHANGED'));
+        
+        if (isNetworkError && attempt < retries) {
+          // Exponential backoff: wait 1s, 2s, 4s
+          const delay = Math.pow(2, attempt) * 1000;
+          console.log(`Network error on attempt ${attempt + 1}, retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        
+        throw error;
+      }
     }
-
-    return response.json();
+    
+    throw new Error('Max retries exceeded');
   }
 
   /**
@@ -113,7 +145,7 @@ class ApiService {
    * Get job processing status
    */
   async getJobStatus(jobId: string): Promise<JobStatus> {
-    return this.request(`/jobs/${jobId}/status`);
+    return this.request(`/jobs/${jobId}/status`, {}, 2); // Fewer retries for polling
   }
 
   /**
@@ -165,9 +197,13 @@ class ApiService {
     intervalMs: number = 2000
   ): Promise<JobStatus> {
     return new Promise((resolve, reject) => {
+      let consecutiveErrors = 0;
+      const maxConsecutiveErrors = 3;
+      
       const poll = async () => {
         try {
           const status = await this.getJobStatus(jobId);
+          consecutiveErrors = 0; // Reset error count on success
           
           if (onProgress) {
             onProgress(status);
@@ -178,11 +214,22 @@ class ApiService {
           } else if (status.status === 'error') {
             reject(new Error(status.error || 'Job failed'));
           } else {
-            // Continue polling
-            setTimeout(poll, intervalMs);
+            // Continue polling with adaptive interval
+            const adaptiveInterval = Math.min(intervalMs * Math.pow(1.5, consecutiveErrors), 10000);
+            setTimeout(poll, adaptiveInterval);
           }
         } catch (error) {
-          reject(error);
+          consecutiveErrors++;
+          console.warn(`Polling error ${consecutiveErrors}/${maxConsecutiveErrors}:`, error);
+          
+          if (consecutiveErrors >= maxConsecutiveErrors) {
+            reject(new Error(`Failed to poll job status after ${maxConsecutiveErrors} consecutive errors: ${error instanceof Error ? error.message : 'Unknown error'}`));
+            return;
+          }
+          
+          // Exponential backoff for polling errors
+          const backoffInterval = intervalMs * Math.pow(2, consecutiveErrors);
+          setTimeout(poll, Math.min(backoffInterval, 30000)); // Cap at 30 seconds
         }
       };
 

@@ -28,7 +28,10 @@ except ImportError:
     DicomTo3D = None
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=['http://localhost:8080', 'http://127.0.0.1:8080', 'http://localhost:8081', 'http://127.0.0.1:8081', 'http://localhost:3000'], 
+     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+     allow_headers=['Content-Type', 'Authorization'],
+     supports_credentials=True)
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
@@ -53,38 +56,62 @@ def allowed_file(filename):
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def extract_dicom_from_zip(zip_path, extract_dir):
-    """Extract DICOM files from ZIP archive"""
+    """Extract DICOM files from ZIP archive with improved detection"""
     extracted_files = []
     
     try:
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             # List all files in the ZIP
             file_list = zip_ref.namelist()
+            print(f"ZIP contains {len(file_list)} files: {[os.path.basename(f) for f in file_list[:10]]}")
             
-            # Filter for DICOM files
-            dicom_files = [f for f in file_list if f.lower().endswith(('.dcm', '.dicom'))]
+            # Filter out directories and get only files
+            files_only = [f for f in file_list if not f.endswith('/') and not os.path.basename(f).startswith('.')]
             
+            # First pass: Look for files with DICOM extensions
+            dicom_files = [f for f in files_only if f.lower().endswith(('.dcm', '.dicom', '.dic', '.ima'))]
+            
+            # Second pass: If no DICOM extensions found, check all files by content
             if not dicom_files:
-                raise ValueError("No DICOM files found in ZIP archive")
+                print("No files with DICOM extensions found. Checking all files by content...")
+                potential_files = files_only
+            else:
+                potential_files = dicom_files
             
-            # Extract DICOM files
-            for dicom_file in dicom_files:
-                # Extract to the specified directory
-                zip_ref.extract(dicom_file, extract_dir)
-                extracted_path = os.path.join(extract_dir, dicom_file)
-                
-                # Validate that the extracted file is actually a DICOM file
-                if is_dicom_file(extracted_path):
-                    extracted_files.append(extracted_path)
-                    print(f"Extracted valid DICOM file: {dicom_file}")
-                else:
-                    print(f"Warning: {dicom_file} does not appear to be a valid DICOM file")
-                    # Remove the invalid file
-                    os.remove(extracted_path)
+            # Extract and validate files
+            for file_path in potential_files:
+                try:
+                    # Extract to temporary location first
+                    zip_ref.extract(file_path, extract_dir)
+                    extracted_path = os.path.join(extract_dir, file_path)
+                    
+                    # Flatten nested directory structure
+                    if os.path.dirname(file_path):
+                        flat_name = os.path.basename(file_path)
+                        flat_path = os.path.join(extract_dir, flat_name)
+                        if extracted_path != flat_path:
+                            os.makedirs(os.path.dirname(flat_path), exist_ok=True)
+                            shutil.move(extracted_path, flat_path)
+                            extracted_path = flat_path
+                    
+                    # Validate that the extracted file is actually a DICOM file
+                    if is_dicom_file(extracted_path):
+                        extracted_files.append(extracted_path)
+                        print(f"Extracted valid DICOM file: {os.path.basename(file_path)}")
+                    else:
+                        print(f"Skipping non-DICOM file: {os.path.basename(file_path)}")
+                        # Remove the invalid file
+                        if os.path.exists(extracted_path):
+                            os.remove(extracted_path)
+                            
+                except Exception as e:
+                    print(f"Error extracting {file_path}: {e}")
+                    continue
             
             if not extracted_files:
-                raise ValueError("No valid DICOM files found in ZIP archive after validation")
+                raise ValueError(f"No valid DICOM files found in ZIP archive. Checked {len(potential_files)} files.")
             
+            print(f"Successfully extracted {len(extracted_files)} DICOM files")
             return extracted_files
             
     except zipfile.BadZipFile:
@@ -93,15 +120,53 @@ def extract_dicom_from_zip(zip_path, extract_dir):
         raise ValueError(f"Error extracting ZIP file: {str(e)}")
 
 def is_dicom_file(file_path):
-    """Check if a file is a valid DICOM file"""
+    """Check if a file is a valid DICOM file with multiple detection methods"""
     try:
-        # Try to read the first 4 bytes to check DICOM signature
         with open(file_path, 'rb') as f:
-            # Skip to position 128 where DICOM signature should be
+            # Method 1: Check for DICOM signature at offset 128
             f.seek(128)
             signature = f.read(4)
-            return signature == b'DICM'
-    except:
+            if signature == b'DICM':
+                return True
+            
+            # Method 2: Check for DICOM signature at beginning (some DICOM files)
+            f.seek(0)
+            first_bytes = f.read(4)
+            if first_bytes == b'DICM':
+                return True
+            
+            # Method 3: Try to parse with pydicom (more reliable but slower)
+            try:
+                import pydicom
+                f.seek(0)
+                # Try to read just the header to validate
+                pydicom.dcmread(file_path, stop_before_pixels=True, force=True)
+                return True
+            except:
+                pass
+            
+            # Method 4: Check file size and some common DICOM patterns
+            f.seek(0)
+            file_size = os.path.getsize(file_path)
+            if file_size > 1024:  # DICOM files are usually larger than 1KB
+                # Look for common DICOM tags in first 1KB
+                header = f.read(1024)
+                # Check for common DICOM UIDs or tags
+                dicom_patterns = [
+                    b'1.2.840.10008',  # DICOM UID prefix
+                    b'DICM',
+                    b'\x08\x00\x05\x00',  # Specific Charset tag
+                    b'\x08\x00\x16\x00',  # SOP Class UID tag
+                    b'\x10\x00\x10\x00',  # Patient Name tag
+                ]
+                
+                for pattern in dicom_patterns:
+                    if pattern in header:
+                        return True
+            
+        return False
+    except Exception as e:
+        print(f"Error checking DICOM file {file_path}: {e}")
         return False
 
 def process_dicom_files(job_id, file_paths):
@@ -348,7 +413,6 @@ def upload_files():
                 file_path = os.path.join(job_dir, filename)
                 file.save(file_path)
                 
-<<<<<<< HEAD
                 # Check if it's a ZIP file
                 if filename.lower().endswith('.zip'):
                     try:
@@ -362,45 +426,21 @@ def upload_files():
                             uploaded_files.append({
                                 'filename': f"{filename}/{extracted_filename}",
                                 'size': os.path.getsize(extracted_file),
-                                'source': 'zip'
+                                'source': 'zip',
+                                'extracted': True
                             })
                         
                         print(f"Extracted {len(extracted_files)} DICOM files from {filename}")
                         
                     except Exception as e:
                         return jsonify({'error': f'Error processing ZIP file {filename}: {str(e)}'}), 400
-=======
-                # Handle ZIP files
-                if filename.lower().endswith('.zip'):
-                    try:
-                        with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                            for zip_info in zip_ref.infolist():
-                                if not zip_info.is_dir() and (zip_info.filename.lower().endswith('.dcm') or zip_info.filename.lower().endswith('.dicom')):
-                                    # Extract DICOM file
-                                    extracted_path = os.path.join(job_dir, os.path.basename(zip_info.filename))
-                                    with zip_ref.open(zip_info) as source, open(extracted_path, 'wb') as target:
-                                        target.write(source.read())
-                                    file_paths.append(extracted_path)
-                                    uploaded_files.append({
-                                        'filename': f"{filename}:{os.path.basename(zip_info.filename)}",
-                                        'size': zip_info.file_size
-                                    })
-                        # Remove the ZIP file after extraction
-                        os.remove(file_path)
-                    except zipfile.BadZipFile:
-                        print(f"Invalid ZIP file: {filename}")
->>>>>>> 7b675b3b930315b3e12c8f0c9a276d80f9f3b831
                 else:
                     # Regular DICOM file
                     file_paths.append(file_path)
                     uploaded_files.append({
                         'filename': filename,
-<<<<<<< HEAD
                         'size': os.path.getsize(file_path),
                         'source': 'direct'
-=======
-                        'size': os.path.getsize(file_path)
->>>>>>> 7b675b3b930315b3e12c8f0c9a276d80f9f3b831
                     })
         
         if not file_paths:
@@ -448,14 +488,66 @@ def upload_files():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/jobs/<job_id>/status', methods=['GET'])
+@app.route('/api/jobs/<job_id>/status', methods=['GET', 'OPTIONS'])
 def get_job_status(job_id):
     """Get processing job status"""
-    if job_id not in processing_jobs:
-        return jsonify({'error': 'Job not found'}), 404
+    # Handle preflight OPTIONS request
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,OPTIONS')
+        return response
     
-    job = processing_jobs[job_id]
-    return jsonify(job)
+    try:
+        if job_id not in processing_jobs:
+            print(f"Job {job_id} not found in processing_jobs. Available jobs: {list(processing_jobs.keys())}")
+            return jsonify({'error': 'Job not found'}), 404
+        
+        job = processing_jobs[job_id]
+        print(f"Retrieved job {job_id}: {job}")
+        
+        # Ensure job has all required fields with safe defaults
+        response_data = {
+            'job_id': job_id,
+            'status': job.get('status', 'unknown'),
+            'progress': int(job.get('progress', 0)),
+            'message': str(job.get('message', '')),
+            'created_at': str(job.get('created_at', '')),
+            'files': job.get('files', []),
+            'error': job.get('error', None)
+        }
+        
+        # Add results if available and ensure they're serializable
+        if 'results' in job and job['results']:
+            try:
+                # Ensure results are JSON serializable
+                results = job['results']
+                if isinstance(results, dict):
+                    response_data['results'] = results
+                else:
+                    print(f"Warning: results for job {job_id} is not a dict: {type(results)}")
+            except Exception as e:
+                print(f"Error processing results for job {job_id}: {e}")
+                response_data['error'] = f"Error processing results: {str(e)}"
+        
+        print(f"Returning response for job {job_id}: status={response_data['status']}, progress={response_data['progress']}")
+        return jsonify(response_data)
+        
+    except Exception as e:
+        error_msg = f"Error in get_job_status for job {job_id}: {str(e)}"
+        print(error_msg)
+        import traceback
+        traceback.print_exc()
+        
+        # Return a safe error response
+        return jsonify({
+            'job_id': job_id,
+            'status': 'error',
+            'progress': 0,
+            'error': f'Internal server error: {str(e)}',
+            'message': 'Failed to retrieve job status'
+        }), 500
 
 @app.route('/api/jobs/<job_id>/results', methods=['GET'])
 def get_job_results(job_id):
